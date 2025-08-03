@@ -7,7 +7,6 @@ namespace cAlgo.Robots
     [Robot(AccessRights = AccessRights.None, AddIndicators = true)]
     public class HistoricalDataExtractor : Robot
     {
-        [Parameter(DefaultValue = "Historical Data Extractor")]
         public string Message { get; set; }
 
         private string _csvFilePath;
@@ -35,14 +34,14 @@ namespace cAlgo.Robots
 
             // Initialize bar index and bar-close spread
             _lastBarIndex = Bars.Count - 1;
-            _barCloseSpread = Symbol.Ask - Symbol.Bid;
+            _barCloseSpread = Symbol.Spread * 10000;
         }
 
         protected override void OnTick()
         {
             // Bar-level spread and OHLC logging
             var currentIndex = Bars.Count - 1;
-            var currentSpread = Symbol.Spread;
+            var currentSpread = Symbol.Spread * 10000;
             var granularity = GetShortTimeFrame(TimeFrame);
             var instrument = SymbolName;
             if (currentIndex != _lastBarIndex)
@@ -52,7 +51,7 @@ namespace cAlgo.Robots
                 var dateTime = bar.OpenTime.ToString("yyyy-MM-dd HH:mm:ss.fff");
                 var volume = bar.TickVolume;
                 // Prepare CSV line: DateTime, Instrument, Granularity, Open, High, Low, Close, Volume, Spread
-                var csvLine = string.Format("{0},{1},{2},{3:G},{4:G},{5:G},{6:G},{7:G},{8:G}",
+                var csvLine = string.Format("{0},{1},{2},{3:F5},{4:F5},{5:F5},{6:F5},{7},{8:F1}",
                     dateTime,
                     instrument,
                     granularity,

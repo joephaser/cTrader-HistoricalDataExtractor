@@ -17,17 +17,7 @@
     "Video": null,
     "Lines": [],
     "Clouds": [],
-    "Parameters": [
-      {
-        "DefaultValue": "Historical Data Extractor",
-        "ParameterType": "String",
-        "PropertyName": "Message",
-        "FriendlyName": "Message",
-        "GroupName": null,
-        "IsValueVisibleInTitle": true,
-        "Description": ""
-      }
-    ],
+    "Parameters": [],
     "Capabilities": [],
     "CustomAttributes": [],
     "Sets": [],
