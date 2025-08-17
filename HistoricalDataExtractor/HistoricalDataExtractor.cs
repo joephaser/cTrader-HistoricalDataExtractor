@@ -15,48 +15,36 @@ namespace cAlgo.Robots
     public class HistoricalDataExtractor : Robot
     {
     // General
-    [Parameter("Message", Group = "General", DefaultValue = "")] 
-    public string Message { get; set; }
 
     // User-configurable parameters
-    [Parameter("Flush Max Buffer Chars", DefaultValue = 32768, MinValue = 512, Step = 512, Group = "Flush Settings")]
-    public int FlushMaxBufferChars { get; set; }
+    // FlushMaxBufferChars is now fixed and not configurable
 
-    [Parameter("Flush Interval (Seconds)", DefaultValue = 2, MinValue = 0, Step = 1, Group = "Flush Settings")]
-    public int FlushIntervalSeconds { get; set; }
-
-    [Parameter("Flush Every Tick", DefaultValue = false, Group = "Flush Settings")]
-    public bool FlushEveryTick { get; set; }
+    // Removed: Flush Interval parameter
+    public bool FlushEveryTick = false;
 
     [Parameter("Output Subfolder", DefaultValue = "cTraderTicks", Group = "File")]
     public string OutputSubfolder { get; set; }
-    [Parameter("Rollover Mode", DefaultValue = RolloverMode.Daily, Group = "File")]
-    public RolloverMode FileRolloverMode { get; set; }
-    [Parameter("Compression", DefaultValue = CompressionModeOption.None, Group = "File")]
-    public CompressionModeOption CompressionModeParam { get; set; }
+    private readonly CompressionModeOption CompressionModeParam = CompressionModeOption.GZip;
     [Parameter("Use cAlgo Data Folder", DefaultValue = true, Group = "File")]
     public bool UseDataFolder { get; set; }
+    [Parameter("Server Time UTC Offset (Hours)", DefaultValue = 0, MinValue = -24, MaxValue = 24, Step = 1, Group = "File")]
+    public int ServerTimeUtcOffsetHours { get; set; }
+    public bool AsyncWrites = true;
 
-    [Parameter("Async Writes", DefaultValue = true, Group = "Performance")]
-    public bool AsyncWrites { get; set; }
-
-    [Parameter("Price Change Filter", DefaultValue = PriceChangeFilterMode.AllTicks, Group = "Filtering")]
-    public PriceChangeFilterMode PriceChangeFilter { get; set; }
+    // All ticks will be recorded (price change filter removed)
 
     // Tick-level file & buffering (daily rotation)
     private string _tickCsvFilePath;
     private bool _tickCsvHeaderWritten = false;
-    private StringBuilder _tickBuffer = new StringBuilder(32_768);
+    private StringBuilder _tickBuffer = new StringBuilder(327680);
     private DateTime _lastTickFlush = DateTime.MinValue;
     private int _effectiveFlushChars;
     private int _effectiveFlushIntervalSeconds;
-    private DateTime _currentFileDate = DateTime.MinValue; // date for current daily file
-    private DateTime _sessionStart;
-
-    // Filtering state
-    private bool _havePrevPrices = false;
-    private double _prevBid;
-    private double _prevAsk;
+    // Single file mode (no rollover)
+    private bool _fileOpened = false;
+    private DateTime? _firstTickUtc = null;
+    private DateTime _lastTickUtc = DateTime.MinValue;
+    private string _outputFolder;
 
     // Async write infrastructure
     private readonly ConcurrentQueue<string> _writeQueue = new ConcurrentQueue<string>();
@@ -73,20 +61,14 @@ namespace cAlgo.Robots
             // To learn more about cTrader Algo visit our Help Center:
             // https://help.ctrader.com/ctrader-algo/
 
-            if (!string.IsNullOrWhiteSpace(Message))
-                Print(Message);
+            // Removed: user-specified file name prefix
 
             // Sanitize / apply effective flush settings
-            _effectiveFlushChars = Math.Max(FlushMaxBufferChars, 512); // enforce minimum
-            _effectiveFlushIntervalSeconds = Math.Max(FlushIntervalSeconds, 0); // 0 => disabled time-based flush
-            _tickBuffer = new StringBuilder(Math.Min(_effectiveFlushChars, 131072)); // cap initial capacity
+            _effectiveFlushChars = 327680; // fixed value
+            _effectiveFlushIntervalSeconds = 5; // fixed to 5 seconds
+            _tickBuffer = new StringBuilder(_effectiveFlushChars); // fixed initial capacity
 
-            _sessionStart = Server.Time;
-            // Open initial file (daily or session)
-            if (FileRolloverMode == RolloverMode.Daily)
-                OpenNewFile(Server.Time.Date);
-            else
-                OpenNewSessionFile();
+            OpenOutputFile();
 
             // Start a 1-second timer if we need time-based flushing independent of tick arrival
             if (_effectiveFlushIntervalSeconds > 0)
@@ -106,46 +88,17 @@ namespace cAlgo.Robots
             // Tick-level bid/ask logging (each tick only)
             var instrument = SymbolName;
             var granularity = GetShortTimeFrame(TimeFrame); // still useful for naming context
-            var tickTime = Server.Time; // current tick time
-            // Rotate file only if daily mode
-            if (FileRolloverMode == RolloverMode.Daily && tickTime.Date != _currentFileDate)
-                OpenNewFile(tickTime.Date);
+            var serverNow = Server.Time; // broker server time
+            var tickTimeUtc = GetUtc(serverNow);
+            // No rollover; track range
+            if (!_firstTickUtc.HasValue) _firstTickUtc = tickTimeUtc;
+            _lastTickUtc = tickTimeUtc;
             var bid = Symbol.Bid; // Best bid price
             var ask = Symbol.Ask; // Best ask price
             // Compute spread manually; Symbol.Spread may be zero/unsupported in some contexts
             var spreadPips = (ask - bid) / Symbol.PipSize; // in pips
             var volume = Bars.TickVolumes.LastValue; // Current bar tick volume (proxy for activity)
-            var tickTimeStr = tickTime.ToString("yyyy-MM-dd HH:mm:ss.fff");
-
-            // Price change filtering
-            bool bidChanged = !_havePrevPrices || bid != _prevBid;
-            bool askChanged = !_havePrevPrices || ask != _prevAsk;
-            bool spreadChanged = !_havePrevPrices || (ask - bid) != (_prevAsk - _prevBid);
-            bool shouldLog = PriceChangeFilter switch
-            {
-                PriceChangeFilterMode.AllTicks => true,
-                PriceChangeFilterMode.AnySideChange => bidChanged || askChanged,
-                PriceChangeFilterMode.BidOnly => bidChanged,
-                PriceChangeFilterMode.AskOnly => askChanged,
-                PriceChangeFilterMode.SpreadChange => spreadChanged,
-                _ => true
-            };
-            if (!_havePrevPrices)
-            {
-                _prevBid = bid; _prevAsk = ask; _havePrevPrices = true; // ensure first tick logged
-                shouldLog = true;
-            }
-            if (shouldLog)
-            {
-                _prevBid = bid; _prevAsk = ask;
-            }
-            else
-            {
-                // Still evaluate flush timers even if no logging
-                if (FlushEveryTick)
-                    FlushTickBuffer();
-                return;
-            }
+            var tickTimeStr = tickTimeUtc.ToString("yyyy-MM-dd HH:mm:ss.fff");
 
             // Dynamic formatting based on symbol digits for bid/ask
             var priceFormat = "F" + Symbol.Digits;
@@ -163,7 +116,7 @@ namespace cAlgo.Robots
             // Flush conditions: explicit each tick OR size threshold OR time interval (if > 0)
             if (FlushEveryTick ||
                 _tickBuffer.Length >= _effectiveFlushChars ||
-                (_effectiveFlushIntervalSeconds > 0 && (tickTime - _lastTickFlush).TotalSeconds >= _effectiveFlushIntervalSeconds))
+                (_effectiveFlushIntervalSeconds > 0 && (serverNow - _lastTickFlush).TotalSeconds >= _effectiveFlushIntervalSeconds))
                 FlushTickBuffer();
         }
 
@@ -190,6 +143,7 @@ namespace cAlgo.Robots
                 try { _writerTask?.Wait(3000); } catch { }
             }
             CloseCurrentStreams();
+            TryFinalizeFileName();
         }
 
     // Helper to convert TimeFrame to short format (e.g. M1, M5, H1)
@@ -219,8 +173,8 @@ namespace cAlgo.Robots
 
                 if (!_tickCsvHeaderWritten)
                 {
-                    // Column order: DateTime,Instrument,Granularity,Bid,Ask,Spread(pips),Volume
-                    snapshot = "DateTime,Instrument,Granularity,Bid,Ask,Spread(pips),Volume\r\n" + snapshot;
+                    // Column order: DateTimeUTC,Instrument,Granularity,Bid,Ask,Spread(pips),Volume
+                    snapshot = "DateTimeUTC,Instrument,Granularity,Bid,Ask,Spread(pips),Volume\r\n" + snapshot;
                     _tickCsvHeaderWritten = true;
                 }
 
@@ -240,26 +194,21 @@ namespace cAlgo.Robots
             }
         }
 
-        private void OpenNewFile(DateTime date)
+        private void OpenOutputFile()
         {
-            FlushTickBuffer(); // flush buffer to old file first
-            CloseCurrentStreams();
-            _currentFileDate = date.Date;
+            if (_fileOpened) return;
             var instrument = SymbolName;
             var granularity = GetShortTimeFrame(TimeFrame);
-            var fileName = string.Format("{0}_{1}_{2:yyyyMMdd}_ticks.csv", instrument, granularity, _currentFileDate);
+            // Always use dynamic naming (legacy behavior) with provisional RUNNING tag until stop
+            var provisionalStamp = GetUtc(Server.Time).ToString("yyyyMMdd_HHmmss");
+            var prefix = $"{instrument}_{granularity}";
+            var fileName = $"{prefix}_{provisionalStamp}_to_RUNNING_ticks.csv"; // finalized later
             InitializeFile(fileName);
+            _fileOpened = true;
         }
 
-        private void OpenNewSessionFile()
-        {
-            FlushTickBuffer();
-            CloseCurrentStreams();
-            var instrument = SymbolName;
-            var granularity = GetShortTimeFrame(TimeFrame);
-            var fileName = string.Format("{0}_{1}_{2:yyyyMMdd_HHmmss}_session_ticks.csv", instrument, granularity, _sessionStart);
-            InitializeFile(fileName);
-        }
+    // Convert server (broker) time to UTC using configured offset
+    private DateTime GetUtc(DateTime serverTime) => serverTime - TimeSpan.FromHours(ServerTimeUtcOffsetHours);
 
         private void InitializeFile(string baseFileName)
         {
@@ -281,25 +230,26 @@ namespace cAlgo.Robots
                 baseFileName += ".gz";
 
             _tickCsvFilePath = Path.Combine(baseFolder, baseFileName);
+            _outputFolder = baseFolder;
             var fileExists = File.Exists(_tickCsvFilePath);
             _tickCsvHeaderWritten = fileExists; // if exists assume header present
             try
             {
                 if (CompressionModeParam == CompressionModeOption.GZip)
                 {
-                    _fileStream = new FileStream(_tickCsvFilePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+                    _fileStream = new FileStream(_tickCsvFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
                     _gzipStream = new GZipStream(_fileStream, CompressionLevel.SmallestSize, leaveOpen: true);
                 }
                 else if (!fileExists)
                 {
                     // Create empty file early so user can see it immediately
-                    using (var fs = new FileStream(_tickCsvFilePath, FileMode.CreateNew, FileAccess.Write, FileShare.Read)) { }
+                    using (var fs = new FileStream(_tickCsvFilePath, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite)) { }
                 }
 
                 // Write header immediately for visibility (and avoid waiting for first flush)
                 if (!_tickCsvHeaderWritten)
                 {
-                    var header = "DateTime,Instrument,Granularity,Bid,Ask,Spread(pips),Volume\r\n";
+                    var header = "DateTimeUTC,Instrument,Granularity,Bid,Ask,Spread(pips),Volume\r\n";
                     if (CompressionModeParam == CompressionModeOption.GZip)
                     {
                         var bytes = Encoding.UTF8.GetBytes(header);
@@ -322,9 +272,18 @@ namespace cAlgo.Robots
 
         private void CloseCurrentStreams()
         {
-            try { _gzipStream?.Dispose(); } catch { }
-            try { _fileStream?.Dispose(); } catch { }
-            _gzipStream = null; _fileStream = null;
+            try
+            {
+                _gzipStream?.Dispose();
+            }
+            catch { }
+            _gzipStream = null;
+            try
+            {
+                _fileStream?.Dispose();
+            }
+            catch { }
+            _fileStream = null;
         }
 
         private void WriteChunk(string chunk)
@@ -337,7 +296,7 @@ namespace cAlgo.Robots
                     if (_gzipStream == null)
                     {
                         // reopen (e.g., after rotation)
-                        var fs = new FileStream(_tickCsvFilePath, FileMode.Append, FileAccess.Write, FileShare.Read);
+                        var fs = new FileStream(_tickCsvFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
                         _fileStream = fs;
                         _gzipStream = new GZipStream(_fileStream, CompressionLevel.SmallestSize, leaveOpen: true);
                     }
@@ -370,16 +329,54 @@ namespace cAlgo.Robots
                     Thread.Sleep(10);
                 }
             }
-            // Drain remaining
+            // Drain remaining queue after cancellation
             while (_writeQueue.TryDequeue(out var remaining))
             {
                 WriteChunk(remaining);
             }
         }
 
+        private void TryFinalizeFileName()
+        {
+            // No longer skip renaming for custom file name (option removed)
+            if (string.IsNullOrEmpty(_tickCsvFilePath) || !_firstTickUtc.HasValue || _lastTickUtc == DateTime.MinValue)
+                return;
+            try
+            {
+                var instrument = SymbolName;
+                var granularity = GetShortTimeFrame(TimeFrame);
+                var first = _firstTickUtc.Value;
+                var last = _lastTickUtc;
+                var prefix = $"{instrument}_{granularity}";
+                var newName = string.Format("{0}_{1}_to_{2}_ticks.csv", prefix,
+                    first.ToString("yyyyMMdd_HHmmss"), last.ToString("yyyyMMdd_HHmmss"));
+                if (CompressionModeParam == CompressionModeOption.GZip) newName += ".gz";
+                var finalPath = Path.Combine(_outputFolder ?? Path.GetDirectoryName(_tickCsvFilePath)!, newName);
+                if (File.Exists(finalPath))
+                {
+                    int i = 1;
+                    string candidate;
+                    do
+                    {
+                        candidate = Path.Combine(_outputFolder ?? Path.GetDirectoryName(_tickCsvFilePath)!,
+                            Path.GetFileNameWithoutExtension(newName) + "_" + i + Path.GetExtension(newName));
+                        i++;
+                    } while (File.Exists(candidate) && i < 1000);
+                    finalPath = candidate;
+                }
+                if (!string.Equals(finalPath, _tickCsvFilePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Move(_tickCsvFilePath, finalPath, overwrite: false);
+                    _tickCsvFilePath = finalPath;
+                }
+            }
+            catch (Exception ex)
+            {
+                Print($"Filename finalize failed: {ex.Message}");
+            }
+        }
+
         // Enums for parameters
-        public enum RolloverMode { Daily, Session }
-        public enum CompressionModeOption { None, GZip }
-        public enum PriceChangeFilterMode { AllTicks, AnySideChange, BidOnly, AskOnly, SpreadChange }
+    public enum CompressionModeOption { None, GZip }
     }
 }
