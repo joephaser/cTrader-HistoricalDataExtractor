@@ -17,8 +17,115 @@
     "Video": null,
     "Lines": [],
     "Clouds": [],
-    "Parameters": [],
-    "Capabilities": [],
+    "Parameters": [
+      {
+        "DefaultValue": "",
+        "ParameterType": "String",
+        "PropertyName": "Message",
+        "FriendlyName": "Message",
+        "GroupName": "General",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      },
+      {
+        "MinValue": 512,
+        "MaxValue": 2147483647,
+        "Step": 512,
+        "DefaultValue": 32768,
+        "ParameterType": "Integer",
+        "PropertyName": "FlushMaxBufferChars",
+        "FriendlyName": "Flush Max Buffer Chars",
+        "GroupName": "Flush Settings",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      },
+      {
+        "MinValue": 0,
+        "MaxValue": 2147483647,
+        "Step": 1,
+        "DefaultValue": 2,
+        "ParameterType": "Integer",
+        "PropertyName": "FlushIntervalSeconds",
+        "FriendlyName": "Flush Interval (Seconds)",
+        "GroupName": "Flush Settings",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      },
+      {
+        "DefaultValue": false,
+        "ParameterType": "Boolean",
+        "PropertyName": "FlushEveryTick",
+        "FriendlyName": "Flush Every Tick",
+        "GroupName": "Flush Settings",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      },
+      {
+        "DefaultValue": "cTraderTicks",
+        "ParameterType": "String",
+        "PropertyName": "OutputSubfolder",
+        "FriendlyName": "Output Subfolder",
+        "GroupName": "File",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      },
+      {
+        "EnumValues": {
+          "Daily": 0,
+          "Session": 1
+        },
+        "DefaultValue": 0,
+        "ParameterType": "Enum",
+        "PropertyName": "FileRolloverMode",
+        "FriendlyName": "Rollover Mode",
+        "GroupName": "File",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      },
+      {
+        "EnumValues": {
+          "None": 0,
+          "GZip": 1
+        },
+        "DefaultValue": 0,
+        "ParameterType": "Enum",
+        "PropertyName": "CompressionModeParam",
+        "FriendlyName": "Compression",
+        "GroupName": "File",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      },
+      {
+        "DefaultValue": true,
+        "ParameterType": "Boolean",
+        "PropertyName": "AsyncWrites",
+        "FriendlyName": "Async Writes",
+        "GroupName": "Performance",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      },
+      {
+        "EnumValues": {
+          "AllTicks": 0,
+          "AnySideChange": 1,
+          "BidOnly": 2,
+          "AskOnly": 3,
+          "SpreadChange": 4
+        },
+        "DefaultValue": 0,
+        "ParameterType": "Enum",
+        "PropertyName": "PriceChangeFilter",
+        "FriendlyName": "Price Change Filter",
+        "GroupName": "Filtering",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      }
+    ],
+    "Capabilities": [
+      {
+        "CapabilityType": "FullTrust"
+      }
+    ],
     "CustomAttributes": [],
     "Sets": [],
     "AddIndicatorsToChart": true,
