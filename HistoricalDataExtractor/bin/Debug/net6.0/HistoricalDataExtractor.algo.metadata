@@ -98,6 +98,15 @@
       {
         "DefaultValue": true,
         "ParameterType": "Boolean",
+        "PropertyName": "UseDataFolder",
+        "FriendlyName": "Use cAlgo Data Folder",
+        "GroupName": "File",
+        "IsValueVisibleInTitle": true,
+        "Description": ""
+      },
+      {
+        "DefaultValue": true,
+        "ParameterType": "Boolean",
         "PropertyName": "AsyncWrites",
         "FriendlyName": "Async Writes",
         "GroupName": "Performance",

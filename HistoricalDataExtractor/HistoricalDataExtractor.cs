@@ -34,6 +34,8 @@ namespace cAlgo.Robots
     public RolloverMode FileRolloverMode { get; set; }
     [Parameter("Compression", DefaultValue = CompressionModeOption.None, Group = "File")]
     public CompressionModeOption CompressionModeParam { get; set; }
+    [Parameter("Use cAlgo Data Folder", DefaultValue = true, Group = "File")]
+    public bool UseDataFolder { get; set; }
 
     [Parameter("Async Writes", DefaultValue = true, Group = "Performance")]
     public bool AsyncWrites { get; set; }
@@ -261,20 +263,55 @@ namespace cAlgo.Robots
 
         private void InitializeFile(string baseFileName)
         {
-            var baseFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), OutputSubfolder ?? "cTraderTicks");
+            var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            string baseFolder;
+            if (UseDataFolder)
+            {
+                // Typical platform data path under Documents\cAlgo\Data\cBots\HistoricalDataExtractor
+                var dataRoot = Path.Combine(documents, "cAlgo", "Data", "cBots", "HistoricalDataExtractor");
+                baseFolder = string.IsNullOrWhiteSpace(OutputSubfolder) ? dataRoot : Path.Combine(dataRoot, OutputSubfolder);
+            }
+            else
+            {
+                baseFolder = Path.Combine(documents, OutputSubfolder ?? "cTraderTicks");
+            }
             try { Directory.CreateDirectory(baseFolder); } catch (Exception ex) { Print($"Failed to create directory '{baseFolder}': {ex.Message}"); }
 
             if (CompressionModeParam == CompressionModeOption.GZip)
                 baseFileName += ".gz";
 
             _tickCsvFilePath = Path.Combine(baseFolder, baseFileName);
-            _tickCsvHeaderWritten = File.Exists(_tickCsvFilePath); // if exists assume header present
+            var fileExists = File.Exists(_tickCsvFilePath);
+            _tickCsvHeaderWritten = fileExists; // if exists assume header present
             try
             {
                 if (CompressionModeParam == CompressionModeOption.GZip)
                 {
                     _fileStream = new FileStream(_tickCsvFilePath, FileMode.Append, FileAccess.Write, FileShare.Read);
                     _gzipStream = new GZipStream(_fileStream, CompressionLevel.SmallestSize, leaveOpen: true);
+                }
+                else if (!fileExists)
+                {
+                    // Create empty file early so user can see it immediately
+                    using (var fs = new FileStream(_tickCsvFilePath, FileMode.CreateNew, FileAccess.Write, FileShare.Read)) { }
+                }
+
+                // Write header immediately for visibility (and avoid waiting for first flush)
+                if (!_tickCsvHeaderWritten)
+                {
+                    var header = "DateTime,Instrument,Granularity,Bid,Ask,Spread(pips),Volume\r\n";
+                    if (CompressionModeParam == CompressionModeOption.GZip)
+                    {
+                        var bytes = Encoding.UTF8.GetBytes(header);
+                        _gzipStream.Write(bytes, 0, bytes.Length);
+                        _gzipStream.Flush();
+                        _fileStream.Flush();
+                    }
+                    else
+                    {
+                        File.AppendAllText(_tickCsvFilePath, header, Encoding.UTF8);
+                    }
+                    _tickCsvHeaderWritten = true;
                 }
             }
             catch (Exception ex)

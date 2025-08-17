@@ -1,31 +1,100 @@
-# .gitignore for cTrader cBot (.NET/C#)
+###############################################
+# cTrader HistoricalDataExtractor .gitignore  #
+# Focus: .NET build artifacts, IDE clutter,   #
+#          cTrader compiled + backtest data   #
+###############################################
 
-# Build results
-bin/
-obj/
+# ---------------------------
+# Core build output
+# ---------------------------
+[Bb]in/
+[Oo]bj/
+**/publish/
+*.pdb
+*.dll
+*.exe
+*.exe.config
+*.cache
+*.mdb
+*.ilk
+*.lib
+*.so
+*.dylib
+*.a
+*.o
 
-# User-specific files
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+
+# Test / coverage
+TestResult*/
+*.coverage
+*.coveragexml
+
+# ---------------------------
+# User / IDE specific
+# ---------------------------
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
-
-# Visual Studio Code
 .vscode/
+.idea/
+*.sln.iml
+*.DotSettings.user
 
+# ---------------------------
 # OS generated files
+# ---------------------------
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-# Logs
+# ---------------------------
+# Logs & diagnostics
+# ---------------------------
 *.log
+logs/
 
-# cTrader/cAlgo generated files
+# ---------------------------
+# cTrader / cAlgo
+# ---------------------------
 *.algo
 *.algo.metadata
 
-# Publish output
-**/publish/
+# Backtesting / optimization artefacts
+Backtesting/
+**/Backtesting/**
+**/report.html
+**/events.json
+**/parameters.cbotset
+**/log.txt
 
-# CSV output (optional, comment out if you want to track CSVs)
+# Tick data exports (raw) - keep out of repo; remove to version control samples
+cTraderTicks/
+**/cTraderTicks/**
+*_ticks.csv
+*_Ticks_*.csv
+
+# Generic large CSV exports (optional). Comment out if you want to track some.
 *.csv
+# Allowlist example (uncomment a specific file you DO want):
+#!cTraderTicks/sample_small.csv
+
+# ---------------------------
+# Misc / temp
+# ---------------------------
+*.tmp
+*.temp
+~$*
+*.bak
+*.swp
+
+# Secrets / signing (add actual names when created)
+*.pfx
+*.snk
+secrets.json
+
+# End
