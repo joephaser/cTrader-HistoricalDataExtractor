@@ -22,39 +22,40 @@ namespace cAlgo.Robots
     // Removed: Flush Interval parameter
     public bool FlushEveryTick = false;
 
-    [Parameter("Output Subfolder", DefaultValue = "cTraderTicks", Group = "File")]
+    [Parameter("Output Subfolder", DefaultValue = "Extracted", Group = "File")]
     public string OutputSubfolder { get; set; }
     private readonly CompressionModeOption CompressionModeParam = CompressionModeOption.GZip;
-    [Parameter("Use cAlgo Data Folder", DefaultValue = true, Group = "File")]
-    public bool UseDataFolder { get; set; }
     [Parameter("Server Time UTC Offset (Hours)", DefaultValue = 0, MinValue = -24, MaxValue = 24, Step = 1, Group = "File")]
     public int ServerTimeUtcOffsetHours { get; set; }
     public bool AsyncWrites = true;
 
-    // All ticks will be recorded (price change filter removed)
+    // Bar data will be recorded (OHLC candles)
 
-    // Tick-level file & buffering (daily rotation)
-    private string _tickCsvFilePath;
-    private bool _tickCsvHeaderWritten = false;
-    private StringBuilder _tickBuffer = new StringBuilder(327680);
-    private DateTime _lastTickFlush = DateTime.MinValue;
+    // Bar-level file & buffering - optimized for large datasets
+    private string _barCsvFilePath;
+    private bool _barCsvHeaderWritten = false;
+    private StringBuilder _barBuffer = new StringBuilder(1048576); // 1MB initial capacity (increased from 327KB)
+    private DateTime _lastBarFlush = DateTime.MinValue;
     private int _effectiveFlushChars;
     private int _effectiveFlushIntervalSeconds;
     // Single file mode (no rollover)
     private bool _fileOpened = false;
-    private DateTime? _firstTickUtc = null;
-    private DateTime _lastTickUtc = DateTime.MinValue;
+    private DateTime? _firstBarUtc = null;
+    private DateTime _lastBarUtc = DateTime.MinValue;
     private string _outputFolder;
+    private int _lastProcessedBarIndex = -1;
 
-    // Async write infrastructure
+    // Async write infrastructure - optimized queue
     private readonly ConcurrentQueue<string> _writeQueue = new ConcurrentQueue<string>();
     private CancellationTokenSource _writerCts;
     private Task _writerTask;
     private volatile bool _writerRunning;
+    private readonly object _flushLock = new object(); // Prevent concurrent flush operations
 
     // Compression streams
     private FileStream _fileStream;
     private GZipStream _gzipStream; // when compression enabled
+    private StreamWriter _streamWriter; // for writing to compressed or uncompressed stream
 
         protected override void OnStart()
         {
@@ -63,14 +64,17 @@ namespace cAlgo.Robots
 
             // Removed: user-specified file name prefix
 
-            // Sanitize / apply effective flush settings
-            _effectiveFlushChars = 327680; // fixed value
-            _effectiveFlushIntervalSeconds = 5; // fixed to 5 seconds
-            _tickBuffer = new StringBuilder(_effectiveFlushChars); // fixed initial capacity
+            // Optimized buffer settings for large data handling
+            _effectiveFlushChars = 1048576; // 1MB buffer (increased from 327KB for better performance)
+            _effectiveFlushIntervalSeconds = 10; // 10 seconds (increased from 5 for fewer I/O operations)
+            _barBuffer = new StringBuilder(_effectiveFlushChars, _effectiveFlushChars * 2); // Set max capacity to 2MB
 
             OpenOutputFile();
 
-            // Start a 1-second timer if we need time-based flushing independent of tick arrival
+            // Initialize last processed bar index
+            _lastProcessedBarIndex = Bars.Count - 1;
+
+            // Start a 1-second timer for periodic flushing
             if (_effectiveFlushIntervalSeconds > 0)
                 Timer.Start(1);
 
@@ -83,65 +87,111 @@ namespace cAlgo.Robots
             }
         }
 
+        protected override void OnBar()
+        {
+            // Process completed bars (OHLC data)
+            ProcessCompletedBars();
+        }
+
         protected override void OnTick()
         {
-            // Tick-level bid/ask logging (each tick only)
-            var instrument = SymbolName;
-            var granularity = GetShortTimeFrame(TimeFrame); // still useful for naming context
-            var serverNow = Server.Time; // broker server time
-            var tickTimeUtc = GetUtc(serverNow);
-            // No rollover; track range
-            if (!_firstTickUtc.HasValue) _firstTickUtc = tickTimeUtc;
-            _lastTickUtc = tickTimeUtc;
-            var bid = Symbol.Bid; // Best bid price
-            var ask = Symbol.Ask; // Best ask price
-            // Compute spread manually; Symbol.Spread may be zero/unsupported in some contexts
-            var spreadPips = (ask - bid) / Symbol.PipSize; // in pips
-            var volume = Bars.TickVolumes.LastValue; // Current bar tick volume (proxy for activity)
-            var tickTimeStr = tickTimeUtc.ToString("yyyy-MM-dd HH:mm:ss.fff");
+            // Check for new bars on each tick (backup to OnBar)
+            if (Bars.Count > _lastProcessedBarIndex + 1)
+            {
+                ProcessCompletedBars();
+            }
+        }
 
-            // Dynamic formatting based on symbol digits for bid/ask
-            var priceFormat = "F" + Symbol.Digits;
-            var spreadFormat = "F2"; // Slightly higher precision for spread
-            _tickBuffer
-                .Append(tickTimeStr).Append(',')
-                .Append(instrument).Append(',')
-                .Append(granularity).Append(',')
-                .Append(bid.ToString(priceFormat)).Append(',')
-                .Append(ask.ToString(priceFormat)).Append(',')
-                .Append(spreadPips.ToString(spreadFormat)).Append(',')
-                .Append(volume)
-                .Append("\r\n");
+        private void ProcessCompletedBars()
+        {
+            // Process all completed bars since last check
+            int currentBarCount = Bars.Count;
+            
+            // Process all bars from last processed to current (excluding the current incomplete bar)
+            for (int i = _lastProcessedBarIndex + 1; i < currentBarCount - 1; i++)
+            {
+                if (i < 0) continue;
+                
+                var instrument = SymbolName;
+                var granularity = GetShortTimeFrame(TimeFrame);
+                var barTimeUtc = GetUtc(Bars.OpenTimes[i]);
+                
+                // Track time range
+                if (!_firstBarUtc.HasValue) _firstBarUtc = barTimeUtc;
+                _lastBarUtc = barTimeUtc;
+                
+                // OHLC data
+                var open = Bars.OpenPrices[i];
+                var high = Bars.HighPrices[i];
+                var low = Bars.LowPrices[i];
+                var close = Bars.ClosePrices[i];
+                var volume = Bars.TickVolumes[i];
+                
+                // Calculate spread from close price (approximation)
+                var bid = close;
+                var ask = close + (Symbol.Spread * Symbol.PipSize);
+                var spreadPips = Symbol.Spread;
+                
+                var barTimeStr = barTimeUtc.ToString("yyyy-MM-dd HH:mm:ss");
 
-            // Flush conditions: explicit each tick OR size threshold OR time interval (if > 0)
-            if (FlushEveryTick ||
-                _tickBuffer.Length >= _effectiveFlushChars ||
-                (_effectiveFlushIntervalSeconds > 0 && (serverNow - _lastTickFlush).TotalSeconds >= _effectiveFlushIntervalSeconds))
-                FlushTickBuffer();
+                // Dynamic formatting based on symbol digits
+                var priceFormat = "F" + Symbol.Digits;
+                var spreadFormat = "F2";
+                
+                _barBuffer
+                    .Append(barTimeStr).Append(',')
+                    .Append(instrument).Append(',')
+                    .Append(granularity).Append(',')
+                    .Append(open.ToString(priceFormat)).Append(',')
+                    .Append(high.ToString(priceFormat)).Append(',')
+                    .Append(low.ToString(priceFormat)).Append(',')
+                    .Append(close.ToString(priceFormat)).Append(',')
+                    .Append(spreadPips.ToString(spreadFormat)).Append(',')
+                    .Append(volume)
+                    .Append("\r\n");
+            }
+            
+            // Update last processed index to the last complete bar
+            if (currentBarCount > 1)
+            {
+                _lastProcessedBarIndex = currentBarCount - 2;
+            }
+
+            // Flush conditions: size threshold OR time interval
+            var serverNow = Server.Time;
+            if (_barBuffer.Length >= _effectiveFlushChars ||
+                (_effectiveFlushIntervalSeconds > 0 && (serverNow - _lastBarFlush).TotalSeconds >= _effectiveFlushIntervalSeconds))
+                FlushBarBuffer();
         }
 
         protected override void OnTimer()
         {
             // Ensure periodic flush even during quiet markets
             if (_effectiveFlushIntervalSeconds > 0 &&
-                (Server.Time - _lastTickFlush).TotalSeconds >= _effectiveFlushIntervalSeconds &&
-                _tickBuffer.Length > 0)
+                (Server.Time - _lastBarFlush).TotalSeconds >= _effectiveFlushIntervalSeconds &&
+                _barBuffer.Length > 0)
             {
-                FlushTickBuffer();
+                FlushBarBuffer();
             }
         }
 
         protected override void OnStop()
         {
-            // Final flush of tick buffer
-            FlushTickBuffer();
+            // Process any remaining bars
+            ProcessCompletedBars();
+            
+            // Final flush of bar buffer
+            FlushBarBuffer();
+            
             // Drain queue if async
             if (AsyncWrites)
             {
                 _writerRunning = false;
-                _writerCts.Cancel();
-                try { _writerTask?.Wait(3000); } catch { }
+                _writerCts?.Cancel();
+                try { _writerTask?.Wait(5000); } catch { }
             }
+            // Ensure all pending writes complete before closing
+            Thread.Sleep(100);
             CloseCurrentStreams();
             TryFinalizeFileName();
         }
@@ -162,35 +212,42 @@ namespace cAlgo.Robots
             return tf.ToString();
         }
 
-        // Flush buffered tick lines to disk
-        private void FlushTickBuffer()
+        // Flush buffered bar lines to disk - thread-safe
+        private void FlushBarBuffer()
         {
-            if (_tickBuffer.Length == 0) return;
-            try
+            if (_barBuffer.Length == 0) return;
+            
+            // Prevent concurrent flush operations
+            lock (_flushLock)
             {
-                var snapshot = _tickBuffer.ToString();
-                _tickBuffer.Clear();
+                if (_barBuffer.Length == 0) return; // Double-check after acquiring lock
+                
+                try
+                {
+                    var snapshot = _barBuffer.ToString();
+                    _barBuffer.Clear();
 
-                if (!_tickCsvHeaderWritten)
-                {
-                    // Column order: DateTimeUTC,Instrument,Granularity,Bid,Ask,Spread(pips),Volume
-                    snapshot = "DateTimeUTC,Instrument,Granularity,Bid,Ask,Spread(pips),Volume\r\n" + snapshot;
-                    _tickCsvHeaderWritten = true;
-                }
+                    if (!_barCsvHeaderWritten)
+                    {
+                        // Column order: DateTimeUTC,Instrument,Granularity,Open,High,Low,Close,Spread(pips),Volume
+                        snapshot = "DateTimeUTC,Instrument,Granularity,Open,High,Low,Close,Spread(pips),Volume\r\n" + snapshot;
+                        _barCsvHeaderWritten = true;
+                    }
 
-                if (AsyncWrites)
-                {
-                    _writeQueue.Enqueue(snapshot);
+                    if (AsyncWrites)
+                    {
+                        _writeQueue.Enqueue(snapshot);
+                    }
+                    else
+                    {
+                        WriteChunk(snapshot);
+                    }
+                    _lastBarFlush = Server.Time;
                 }
-                else
+                catch (Exception ex)
                 {
-                    WriteChunk(snapshot);
+                    Print($"Error flushing bar buffer: {ex.Message}");
                 }
-                _lastTickFlush = Server.Time;
-            }
-            catch (Exception ex)
-            {
-                Print($"Error flushing tick buffer: {ex.Message}");
             }
         }
 
@@ -202,7 +259,7 @@ namespace cAlgo.Robots
             // Always use dynamic naming (legacy behavior) with provisional RUNNING tag until stop
             var provisionalStamp = GetUtc(Server.Time).ToString("yyyyMMdd_HHmmss");
             var prefix = $"{instrument}_{granularity}";
-            var fileName = $"{prefix}_{provisionalStamp}_to_RUNNING_ticks.csv"; // finalized later
+            var fileName = $"{prefix}_{provisionalStamp}_to_RUNNING_bars.csv"; // finalized later
             InitializeFile(fileName);
             _fileOpened = true;
         }
@@ -212,61 +269,75 @@ namespace cAlgo.Robots
 
         private void InitializeFile(string baseFileName)
         {
-            var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            // Use cTrader's LocalStorage path
+            // LocalStorage provides methods to save/load data, but for direct file access we need the directory
             string baseFolder;
-            if (UseDataFolder)
+            
+            // Get the Documents folder and construct cTrader's LocalStorage path
+            var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            var localStorageRoot = Path.Combine(documents, "cAlgo", "LocalStorage", "HistoricalDataExtractor");
+            
+            if (string.IsNullOrWhiteSpace(OutputSubfolder))
             {
-                // Typical platform data path under Documents\cAlgo\Data\cBots\HistoricalDataExtractor
-                var dataRoot = Path.Combine(documents, "cAlgo", "Data", "cBots", "HistoricalDataExtractor");
-                baseFolder = string.IsNullOrWhiteSpace(OutputSubfolder) ? dataRoot : Path.Combine(dataRoot, OutputSubfolder);
+                // Default: Use robot's local storage directly
+                baseFolder = localStorageRoot;
             }
             else
             {
-                baseFolder = Path.Combine(documents, OutputSubfolder ?? "cTraderTicks");
+                // User-specified subfolder within robot's local storage
+                baseFolder = Path.Combine(localStorageRoot, OutputSubfolder);
             }
-            try { Directory.CreateDirectory(baseFolder); } catch (Exception ex) { Print($"Failed to create directory '{baseFolder}': {ex.Message}"); }
+            
+            try 
+            { 
+                Directory.CreateDirectory(baseFolder); 
+                Print($"Output folder: {baseFolder}");
+            } 
+            catch (Exception ex) 
+            { 
+                Print($"Failed to create directory '{baseFolder}': {ex.Message}"); 
+            }
 
             if (CompressionModeParam == CompressionModeOption.GZip)
                 baseFileName += ".gz";
 
-            _tickCsvFilePath = Path.Combine(baseFolder, baseFileName);
+            _barCsvFilePath = Path.Combine(baseFolder, baseFileName);
             _outputFolder = baseFolder;
-            var fileExists = File.Exists(_tickCsvFilePath);
-            _tickCsvHeaderWritten = fileExists; // if exists assume header present
+            var fileExists = File.Exists(_barCsvFilePath);
+            _barCsvHeaderWritten = fileExists; // if exists assume header present
             try
             {
                 if (CompressionModeParam == CompressionModeOption.GZip)
                 {
-                    _fileStream = new FileStream(_tickCsvFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-                    _gzipStream = new GZipStream(_fileStream, CompressionLevel.SmallestSize, leaveOpen: true);
+                    // Create or open file for writing (Create overwrites existing file)
+                    _fileStream = new FileStream(_barCsvFilePath, fileExists ? FileMode.Open : FileMode.Create, FileAccess.Write, FileShare.Read);
+                    if (fileExists)
+                    {
+                        // If file exists, seek to end (but GZip should really be new each time)
+                        _fileStream.Seek(0, SeekOrigin.End);
+                    }
+                    _gzipStream = new GZipStream(_fileStream, CompressionLevel.SmallestSize, leaveOpen: false);
+                    _streamWriter = new StreamWriter(_gzipStream, Encoding.UTF8, 131072, leaveOpen: false); // 128KB StreamWriter buffer
                 }
-                else if (!fileExists)
+                else
                 {
-                    // Create empty file early so user can see it immediately
-                    using (var fs = new FileStream(_tickCsvFilePath, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite)) { }
+                    // For uncompressed files, use StreamWriter directly with larger buffer
+                    _fileStream = new FileStream(_barCsvFilePath, fileExists ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.Read, 131072); // 128KB FileStream buffer
+                    _streamWriter = new StreamWriter(_fileStream, Encoding.UTF8, 131072, leaveOpen: false); // 128KB StreamWriter buffer
                 }
 
                 // Write header immediately for visibility (and avoid waiting for first flush)
-                if (!_tickCsvHeaderWritten)
+                if (!_barCsvHeaderWritten)
                 {
-                    var header = "DateTimeUTC,Instrument,Granularity,Bid,Ask,Spread(pips),Volume\r\n";
-                    if (CompressionModeParam == CompressionModeOption.GZip)
-                    {
-                        var bytes = Encoding.UTF8.GetBytes(header);
-                        _gzipStream.Write(bytes, 0, bytes.Length);
-                        _gzipStream.Flush();
-                        _fileStream.Flush();
-                    }
-                    else
-                    {
-                        File.AppendAllText(_tickCsvFilePath, header, Encoding.UTF8);
-                    }
-                    _tickCsvHeaderWritten = true;
+                    var header = "DateTimeUTC,Instrument,Granularity,Open,High,Low,Close,Spread(pips),Volume\r\n";
+                    _streamWriter.Write(header);
+                    _streamWriter.Flush();
+                    _barCsvHeaderWritten = true;
                 }
             }
             catch (Exception ex)
             {
-                Print($"Failed to open file '{_tickCsvFilePath}': {ex.Message}");
+                Print($"Failed to open file '{_barCsvFilePath}': {ex.Message}");
             }
         }
 
@@ -274,15 +345,39 @@ namespace cAlgo.Robots
         {
             try
             {
-                _gzipStream?.Dispose();
+                // Flush and close StreamWriter first (will cascade to GZipStream and FileStream)
+                _streamWriter?.Flush();
+                _streamWriter?.Close();
+                _streamWriter?.Dispose();
             }
-            catch { }
-            _gzipStream = null;
+            catch (Exception ex)
+            {
+                Print($"Error closing StreamWriter: {ex.Message}");
+            }
+            _streamWriter = null;
+            
             try
             {
+                _gzipStream?.Flush();
+                _gzipStream?.Close();
+                _gzipStream?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Print($"Error closing GZipStream: {ex.Message}");
+            }
+            _gzipStream = null;
+            
+            try
+            {
+                _fileStream?.Flush();
+                _fileStream?.Close();
                 _fileStream?.Dispose();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Print($"Error closing FileStream: {ex.Message}");
+            }
             _fileStream = null;
         }
 
@@ -291,23 +386,21 @@ namespace cAlgo.Robots
             if (string.IsNullOrEmpty(chunk)) return;
             try
             {
-                if (CompressionModeParam == CompressionModeOption.GZip)
+                if (_streamWriter != null)
                 {
-                    if (_gzipStream == null)
+                    _streamWriter.Write(chunk);
+                    _streamWriter.Flush();
+                    if (CompressionModeParam == CompressionModeOption.GZip)
                     {
-                        // reopen (e.g., after rotation)
-                        var fs = new FileStream(_tickCsvFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-                        _fileStream = fs;
-                        _gzipStream = new GZipStream(_fileStream, CompressionLevel.SmallestSize, leaveOpen: true);
+                        // Also flush underlying streams for GZip
+                        _gzipStream?.Flush();
                     }
-                    var bytes = Encoding.UTF8.GetBytes(chunk);
-                    _gzipStream.Write(bytes, 0, bytes.Length);
-                    _gzipStream.Flush();
-                    _fileStream.Flush();
+                    _fileStream?.Flush();
                 }
                 else
                 {
-                    File.AppendAllText(_tickCsvFilePath, chunk, Encoding.UTF8);
+                    // Fallback if streams are not initialized
+                    File.AppendAllText(_barCsvFilePath, chunk, Encoding.UTF8);
                 }
             }
             catch (Exception ex)
@@ -326,48 +419,55 @@ namespace cAlgo.Robots
                 }
                 else
                 {
-                    Thread.Sleep(10);
+                    // Use shorter sleep for more responsive queue processing
+                    Thread.Sleep(5);
                 }
             }
-            // Drain remaining queue after cancellation
+            // Drain remaining queue after cancellation with progress feedback
+            int remainingCount = 0;
             while (_writeQueue.TryDequeue(out var remaining))
             {
                 WriteChunk(remaining);
+                remainingCount++;
+            }
+            if (remainingCount > 0)
+            {
+                Print($"Flushed {remainingCount} remaining data chunks on shutdown");
             }
         }
 
         private void TryFinalizeFileName()
         {
             // No longer skip renaming for custom file name (option removed)
-            if (string.IsNullOrEmpty(_tickCsvFilePath) || !_firstTickUtc.HasValue || _lastTickUtc == DateTime.MinValue)
+            if (string.IsNullOrEmpty(_barCsvFilePath) || !_firstBarUtc.HasValue || _lastBarUtc == DateTime.MinValue)
                 return;
             try
             {
                 var instrument = SymbolName;
                 var granularity = GetShortTimeFrame(TimeFrame);
-                var first = _firstTickUtc.Value;
-                var last = _lastTickUtc;
+                var first = _firstBarUtc.Value;
+                var last = _lastBarUtc;
                 var prefix = $"{instrument}_{granularity}";
-                var newName = string.Format("{0}_{1}_to_{2}_ticks.csv", prefix,
+                var newName = string.Format("{0}_{1}_to_{2}_bars.csv", prefix,
                     first.ToString("yyyyMMdd_HHmmss"), last.ToString("yyyyMMdd_HHmmss"));
                 if (CompressionModeParam == CompressionModeOption.GZip) newName += ".gz";
-                var finalPath = Path.Combine(_outputFolder ?? Path.GetDirectoryName(_tickCsvFilePath)!, newName);
+                var finalPath = Path.Combine(_outputFolder ?? Path.GetDirectoryName(_barCsvFilePath)!, newName);
                 if (File.Exists(finalPath))
                 {
                     int i = 1;
                     string candidate;
                     do
                     {
-                        candidate = Path.Combine(_outputFolder ?? Path.GetDirectoryName(_tickCsvFilePath)!,
+                        candidate = Path.Combine(_outputFolder ?? Path.GetDirectoryName(_barCsvFilePath)!,
                             Path.GetFileNameWithoutExtension(newName) + "_" + i + Path.GetExtension(newName));
                         i++;
                     } while (File.Exists(candidate) && i < 1000);
                     finalPath = candidate;
                 }
-                if (!string.Equals(finalPath, _tickCsvFilePath, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(finalPath, _barCsvFilePath, StringComparison.OrdinalIgnoreCase))
                 {
-                    File.Move(_tickCsvFilePath, finalPath, overwrite: false);
-                    _tickCsvFilePath = finalPath;
+                    File.Move(_barCsvFilePath, finalPath, overwrite: false);
+                    _barCsvFilePath = finalPath;
                 }
             }
             catch (Exception ex)

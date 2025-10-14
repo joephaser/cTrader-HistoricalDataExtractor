@@ -1,20 +1,20 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\Joseph\\Documents\\cAlgo\\Sources\\Robots\\HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj": {}
+    "C:\\Users\\joeph\\Documents\\cAlgo\\Sources\\Robots\\cTrader-HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj": {}
   },
   "projects": {
-    "C:\\Users\\Joseph\\Documents\\cAlgo\\Sources\\Robots\\HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj": {
+    "C:\\Users\\joeph\\Documents\\cAlgo\\Sources\\Robots\\cTrader-HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\Joseph\\Documents\\cAlgo\\Sources\\Robots\\HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj",
+        "projectUniqueName": "C:\\Users\\joeph\\Documents\\cAlgo\\Sources\\Robots\\cTrader-HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj",
         "projectName": "HistoricalDataExtractor",
-        "projectPath": "C:\\Users\\Joseph\\Documents\\cAlgo\\Sources\\Robots\\HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj",
-        "packagesPath": "C:\\Users\\Joseph\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\Joseph\\Documents\\cAlgo\\Sources\\Robots\\HistoricalDataExtractor\\HistoricalDataExtractor\\obj\\",
+        "projectPath": "C:\\Users\\joeph\\Documents\\cAlgo\\Sources\\Robots\\cTrader-HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj",
+        "packagesPath": "C:\\Users\\joeph\\.nuget\\packages\\",
+        "outputPath": "C:\\Users\\joeph\\Documents\\cAlgo\\Sources\\Robots\\cTrader-HistoricalDataExtractor\\HistoricalDataExtractor\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "C:\\Users\\Joseph\\AppData\\Roaming\\NuGet\\NuGet.Config"
+          "C:\\Users\\joeph\\AppData\\Roaming\\NuGet\\NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net6.0"
@@ -79,7 +79,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.304\\RuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.305\\RuntimeIdentifierGraph.json"
         }
       }
     }

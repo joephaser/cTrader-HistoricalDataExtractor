@@ -2,7 +2,7 @@
   "version": 3,
   "targets": {
     "net6.0": {
-      "cTrader.Automate/1.0.13": {
+      "cTrader.Automate/1.0.14": {
         "type": "package",
         "compile": {
           "lib/net6.0/cAlgo.API.dll": {
@@ -22,17 +22,17 @@
     }
   },
   "libraries": {
-    "cTrader.Automate/1.0.13": {
-      "sha512": "teFQQhvFb8/1XQsvvGXNlUIkwZ6Ab+FZHqJ8kXiR2AW8IJA0EIue2dRHNglmlRdqSwnMhocSS9EkPZBTXxsHLQ==",
+    "cTrader.Automate/1.0.14": {
+      "sha512": "eNwE7WL90MGBKb5MuLAtZLdQy0vxkI5EVhLWAQ9S83EAdYkGAzdccvGFLk2oqmtSGBtD+gEpyrJUW/ej4dI4jw==",
       "type": "package",
-      "path": "ctrader.automate/1.0.13",
+      "path": "ctrader.automate/1.0.14",
       "hasTools": true,
       "files": [
         ".nupkg.metadata",
         ".signature.p7s",
         "build/cTrader.Automate.props",
         "build/cTrader.Automate.targets",
-        "ctrader.automate.1.0.13.nupkg.sha512",
+        "ctrader.automate.1.0.14.nupkg.sha512",
         "ctrader.automate.nuspec",
         "eula.md",
         "icon.png",
@@ -80,19 +80,19 @@
     ]
   },
   "packageFolders": {
-    "C:\\Users\\Joseph\\.nuget\\packages\\": {}
+    "C:\\Users\\joeph\\.nuget\\packages\\": {}
   },
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\Joseph\\Documents\\cAlgo\\Sources\\Robots\\HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj",
+      "projectUniqueName": "C:\\Users\\joeph\\Documents\\cAlgo\\Sources\\Robots\\cTrader-HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj",
       "projectName": "HistoricalDataExtractor",
-      "projectPath": "C:\\Users\\Joseph\\Documents\\cAlgo\\Sources\\Robots\\HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj",
-      "packagesPath": "C:\\Users\\Joseph\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\Joseph\\Documents\\cAlgo\\Sources\\Robots\\HistoricalDataExtractor\\HistoricalDataExtractor\\obj\\",
+      "projectPath": "C:\\Users\\joeph\\Documents\\cAlgo\\Sources\\Robots\\cTrader-HistoricalDataExtractor\\HistoricalDataExtractor\\HistoricalDataExtractor.csproj",
+      "packagesPath": "C:\\Users\\joeph\\.nuget\\packages\\",
+      "outputPath": "C:\\Users\\joeph\\Documents\\cAlgo\\Sources\\Robots\\cTrader-HistoricalDataExtractor\\HistoricalDataExtractor\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
-        "C:\\Users\\Joseph\\AppData\\Roaming\\NuGet\\NuGet.Config"
+        "C:\\Users\\joeph\\AppData\\Roaming\\NuGet\\NuGet.Config"
       ],
       "originalTargetFrameworks": [
         "net6.0"
@@ -157,7 +157,7 @@
             "privateAssets": "all"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.304\\RuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.305\\RuntimeIdentifierGraph.json"
       }
     }
   }

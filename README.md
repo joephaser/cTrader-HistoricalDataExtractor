@@ -11,9 +11,14 @@ This project is a cTrader cBot for extracting historical OHLCV (Open, High, Low,
 
 ## How It Works
 - On each new bar, the bot writes the previous bar's data to a CSV file.
-- The CSV file is named as: `<Instrument>_<TimeFrame>_<StartDate>_<EndDate>.csv`
-- The file is saved in your Windows Documents folder.
-- The following columns are included: `DateTime, Instrument, Granularity, Open, High, Low, Close, Volume, Spread`
+- The CSV file is named as: `<Instrument>_<TimeFrame>_<StartDate>_<EndDate>.csv` (or with `.gz` when compression is enabled).
+- The file is saved in cTrader's LocalStorage under the robot folder. The default output folder is:
+
+```
+C:\Users\<user>\Documents\cAlgo\LocalStorage\HistoricalDataExtractor\Extracted\
+```
+
+- The following columns are included: `DateTimeUTC, Instrument, Granularity, Open, High, Low, Close, Spread(pips), Volume`
 
 ## Usage
 1. Open the project in cTrader Automate (cAlgo).
@@ -34,6 +39,11 @@ DateTime,Instrument,Granularity,Open,High,Low,Close,Volume,Spread
 ## Requirements
 - cTrader platform (with cAlgo API)
 - .NET 6.0 or compatible
+
+## Notes on performance and buffering
+- The bot uses an in-memory buffer (default ~1MB) and asynchronous disk writes to handle large exports efficiently.
+- Flush interval and buffer sizes are tuned to reduce disk I/O and avoid excessive memory churn. Compressed output uses GZip with a larger stream buffer for better throughput.
+- If you need to export extremely large datasets, consider running the robot during low-activity periods or splitting the export into smaller time ranges.
 
 ## License
 MIT
