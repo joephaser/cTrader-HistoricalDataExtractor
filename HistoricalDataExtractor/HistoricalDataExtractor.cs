@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text; // Buffering tick-level writes
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using System.IO.Compression;
@@ -44,6 +45,10 @@ namespace cAlgo.Robots
     private DateTime _lastBarUtc = DateTime.MinValue;
     private string _outputFolder;
     private int _lastProcessedBarIndex = -1;
+    // Track spread samples per bar to recover average spread even during historical playback
+    private readonly Dictionary<DateTime, SpreadAccumulator> _barSpreadSamples = new Dictionary<DateTime, SpreadAccumulator>();
+    private readonly object _spreadLock = new object();
+    private double _lastKnownSpreadPips = 0.0;
 
     // Async write infrastructure - optimized queue
     private readonly ConcurrentQueue<string> _writeQueue = new ConcurrentQueue<string>();
@@ -56,6 +61,20 @@ namespace cAlgo.Robots
     private FileStream _fileStream;
     private GZipStream _gzipStream; // when compression enabled
     private StreamWriter _streamWriter; // for writing to compressed or uncompressed stream
+
+    private sealed class SpreadAccumulator
+    {
+        public double Sum;
+        public int Count;
+
+        public void Add(double value)
+        {
+            Sum += value;
+            Count++;
+        }
+
+        public double Average => Count > 0 ? Sum / Count : 0.0;
+    }
 
         protected override void OnStart()
         {
@@ -89,17 +108,52 @@ namespace cAlgo.Robots
 
         protected override void OnBar()
         {
+            CaptureSpreadSample();
             // Process completed bars (OHLC data)
             ProcessCompletedBars();
         }
 
         protected override void OnTick()
         {
+            CaptureSpreadSample();
             // Check for new bars on each tick (backup to OnBar)
             if (Bars.Count > _lastProcessedBarIndex + 1)
             {
                 ProcessCompletedBars();
             }
+        }
+
+        private void CaptureSpreadSample()
+        {
+            if (Symbol?.PipSize <= 0)
+                return;
+
+            var ask = Symbol.Ask;
+            var bid = Symbol.Bid;
+            if (ask <= 0 || bid <= 0 || ask < bid)
+                return;
+
+            var currentIndex = Bars.Count - 1;
+            if (currentIndex < 0)
+                return;
+
+            var openTime = Bars.OpenTimes[currentIndex];
+            var spreadPips = (ask - bid) / Symbol.PipSize;
+            if (spreadPips < 0)
+                spreadPips = 0;
+
+            lock (_spreadLock)
+            {
+                if (!_barSpreadSamples.TryGetValue(openTime, out var accumulator))
+                {
+                    accumulator = new SpreadAccumulator();
+                    _barSpreadSamples[openTime] = accumulator;
+                }
+                accumulator.Add(spreadPips);
+            }
+
+            if (spreadPips > 0)
+                _lastKnownSpreadPips = spreadPips;
         }
 
         private void ProcessCompletedBars()
@@ -114,7 +168,8 @@ namespace cAlgo.Robots
                 
                 var instrument = SymbolName;
                 var granularity = GetShortTimeFrame(TimeFrame);
-                var barTimeUtc = GetUtc(Bars.OpenTimes[i]);
+                var barOpenTimeServer = Bars.OpenTimes[i];
+                var barTimeUtc = GetUtc(barOpenTimeServer);
                 
                 // Track time range
                 if (!_firstBarUtc.HasValue) _firstBarUtc = barTimeUtc;
@@ -127,10 +182,21 @@ namespace cAlgo.Robots
                 var close = Bars.ClosePrices[i];
                 var volume = Bars.TickVolumes[i];
                 
-                // Calculate spread from close price (approximation)
-                var bid = close;
-                var ask = close + (Symbol.Spread * Symbol.PipSize);
-                var spreadPips = Symbol.Spread;
+                double spreadPips = 0.0;
+                lock (_spreadLock)
+                {
+                    if (_barSpreadSamples.TryGetValue(barOpenTimeServer, out var accumulator) && accumulator.Count > 0)
+                    {
+                        spreadPips = accumulator.Average;
+                        _barSpreadSamples.Remove(barOpenTimeServer);
+                        if (spreadPips > 0)
+                            _lastKnownSpreadPips = spreadPips;
+                    }
+                    else if (_lastKnownSpreadPips > 0)
+                    {
+                        spreadPips = _lastKnownSpreadPips;
+                    }
+                }
                 
                 var barTimeStr = barTimeUtc.ToString("yyyy-MM-dd HH:mm:ss");
 
